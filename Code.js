@@ -1,3 +1,5 @@
+// LOCAL EDIT TEST
+
 const TICKET_API_URL = "https://script.google.com/macros/s/AKfycbxtaevS9EFN6-7llqAMBaT2BNo18JFCByInzCI5RkyfqV3w4ERXyEctCYcu1Q_m40s/exec";
 
 const SHEET_4_LOG = "1R9C5AaVvN6yJsFvK_zqlpZVZ1mbIwLg8g9nuKVidb8M"
@@ -242,7 +244,7 @@ function chatTurn(input) {
 }
 
 function ping() {
-  return { ok: true, now: new Date().toISOString() };
+  return { ok: true, now: new Date().toISOString(), build: 'local-clasp-1' };
 }
 
 function createTicketFromWeb(payload) {
