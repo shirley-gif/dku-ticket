@@ -360,7 +360,10 @@ function sendTicketConfirmationEmail_(toEmail, finalPayload, ticketResult) {
     ticketId ? `- Ticket ID: ${ticketId}` : null,
     ticketUrl ? `- Ticket Link: ${ticketUrl}` : null,
     ``,
-    `We will follow up if additional details are needed.`,
+    `Next steps`,
+    `- You can reply directly to this email to add more details.`,
+    `- You may attach screenshots or other files.`,
+    `- Please keep the email subject unchanged so we can associate your response with the ticket.`,
     ``,
     `Regards,`,
     `DKU Library Systems`
