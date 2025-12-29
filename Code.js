@@ -210,28 +210,60 @@ function chatTurn(input) {
       const finalPayload = {
         email: p.email,
         title: `[${p.system}] ${p.title}`,
-        description: `System: ${p.system}\nUrgency: ${p.urgency}\nImpact: ${p.impact}\n\n` + p.description,
+        description: `System: ${p.system}\n` + p.description,
         urgency: p.urgency,
         impact: p.impact
       };
       const res = createTicketFromWeb(finalPayload);
 
-      // Send confirmation email only when API call succeeded
-      try {
-        sendTicketConfirmationEmail_(p.email, { ...finalPayload, system: p.system }, res);
-      } catch (e) {
-        const msg = e && e.message ? e.message : String(e);
+  const ok = res && (res.ok === true || res.success === true);
+  if (ok){
+    // Log success
+    logEvent_(
+      'INFO',
+      'ADD_NEW_TICKET',
+      p.email,
+      res.ticketId ? `- Ticket ID: ${res.ticketId}` : null,
+    );
+  } else{
+    // Log failure
+    logEvent_(
+      'ERROR',
+      'ADD_NEW_TICKET_FAIL',
+      p.email,
+      finalPayload.description
+    );
+  }
 
-        console.error('Failed to send confirmation email', msg);
+  // Send confirmation email and always log the outcome
+  try {
+    sendTicketConfirmationEmail_(
+      p.email,
+      { ...finalPayload, system: p.system },
+      res
+    );
 
-        logEvent_(
-          'ERROR',
-          'SEND_CONFIRMATION_EMAIL',
-          p.email,
-          msg
-        );
-      }
 
+    // Log success
+    logEvent_(
+      'INFO',
+      'SEND_CONFIRMATION_EMAIL',
+      p.email,
+      'Confirmation email sent successfully'
+    );
+
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+
+    console.error('Failed to send confirmation email', msg);
+
+    logEvent_(
+      'ERROR',
+      'SEND_CONFIRMATION_EMAIL',
+      p.email,
+      msg
+    );
+  }
 
       clearSession_();
       return { ok: true, message: 'Ticket creation request submitted. A confirmation email will be sent shortly.', ticket_result: res };
@@ -339,6 +371,10 @@ function sendTicketConfirmationEmail_(toEmail, finalPayload, ticketResult) {
     subject: subject,
     body: lines.join('\n')
   });
+
+  //邮件发送成功之后，记录一下
+
+
 }
 
 //通用日志函数（Code.gs）
@@ -360,7 +396,8 @@ function logEvent_(type, stage, email, message) {
     ]);
   } catch (e) {
     // Last-resort: do not break main flow
-    console.error('Logging failed', e);
+    console.error('Logging failed', e);  //记录失败
+    
   }
 }
 
