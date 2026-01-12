@@ -1,0 +1,15 @@
+{
+  "timeZone": "Asia/Shanghai",
+  "dependencies": {
+    "libraries": [
+      {
+        "userSymbol": "DKUTicketCore",
+        "version": "1",
+        "libraryId": "1-U8CnrMthLJEhKiASoZZy4fqNtVtfBP1yj2h1jJE7MsrsZZKKwnY-48_",
+        "developmentMode": false
+      }
+    ]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8"
+}
