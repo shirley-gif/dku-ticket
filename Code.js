@@ -1,10 +1,8 @@
-// LOCAL EDIT TEST
-
-const TICKET_API_URL = "https://script.google.com/macros/s/AKfycbxtaevS9EFN6-7llqAMBaT2BNo18JFCByInzCI5RkyfqV3w4ERXyEctCYcu1Q_m40s/exec";
+const TICKET_API_URL = PropertiesService.getScriptProperties().getProperty('TICKET_API_URL');
 
 const SHEET_4_LOG = "1R9C5AaVvN6yJsFvK_zqlpZVZ1mbIwLg8g9nuKVidb8M"
 
-const ALLOWED_SYSTEMS = ['Alma', 'Summon', 'AtoM', 'Archivematica', 'RFID', 'Other'];
+const ALLOWED_SYSTEMS = ['Alma', 'Summon', 'AtoM', 'Archivematica', 'RFID', 'Game Studio' , 'Other'];
 
 // const ALLOWED_ENVS = ['Production', 'Sandbox', 'N/A'];
 
@@ -216,62 +214,19 @@ function chatTurn(input) {
       };
       const res = createTicketFromWeb(finalPayload);
 
-  const ok = res && (res.ok === true || res.success === true);
-  if (ok){
-    // Log success
-    logEvent_(
-      'INFO',
-      'ADD_NEW_TICKET',
-      p.email,
-      res.ticketId ? `- Ticket ID: ${res.ticketId}` : null,
-    );
-  } else{
-    // Log failure
-    logEvent_(
-      'ERROR',
-      'ADD_NEW_TICKET_FAIL',
-      p.email,
-      finalPayload.description
-    );
-  }
-
-  // Send confirmation email and always log the outcome
-  try {
-    sendTicketConfirmationEmail_(
-      p.email,
-      { ...finalPayload, system: p.system },
-      res
-    );
-
-
-    // Log success
-    logEvent_(
-      'INFO',
-      'SEND_CONFIRMATION_EMAIL',
-      p.email,
-      'Confirmation email sent successfully'
-    );
-
-  } catch (e) {
-    const msg = e && e.message ? e.message : String(e);
-
-    console.error('Failed to send confirmation email', msg);
-
-    logEvent_(
-      'ERROR',
-      'SEND_CONFIRMATION_EMAIL',
-      p.email,
-      msg
-    );
-  }
+      const ok = res && (res.ok === true || res.success === true);
+      
+      // Email sending is handled by lib_ticket_api AFTER row creation.
 
       clearSession_();
-      return { ok: true, message: 'Ticket creation request submitted. A confirmation email will be sent shortly.', ticket_result: res };
+      return {
+        ok: ok,
+        message: ok
+          ? 'Ticket created. A confirmation email will be sent by DKU Library Systems shortly.'
+          : 'Ticket creation failed. Please try again or contact Library Systems.',
+        ticket_result: res
+      };
 
-
-    default:
-      clearSession_();
-      return { ok: false, message: 'Session state error. Resetting. Please click Start to begin again.' };
   }
 }
 
@@ -333,74 +288,3 @@ function renderSummary_(p) {
     `Description:\n${p.description || ''}`
   ].join('\n');
 }
-
-//新增一个邮件函数
-function sendTicketConfirmationEmail_(toEmail, finalPayload, ticketResult) {
-  // Optional: if you want to avoid sending emails when API failed
-  const ok = ticketResult && (ticketResult.ok === true || ticketResult.success === true);
-  if (!ok) return;
-
-  // Try to extract ticket id/url from API response (adjust keys based on your API)
-  const ticketId = ticketResult.ticket_id || ticketResult.id || ticketResult.ticketId || '';
-  const ticketUrl = ticketResult.url || ticketResult.ticket_url || ticketResult.link || '';
-
-  const subject = `DKU Library Systems Ticket Received${ticketId ? ` (#${ticketId})` : ''}`;
-
-  const lines = [
-    `Hello,`,
-    ``,
-    `This is a confirmation that your ticket request has been submitted to DKU Library Systems.`,
-    ``,
-    `Summary`,
-    `- Email: ${toEmail}`,
-    `- System: ${finalPayload.system || ''}`,
-    `- Title: ${finalPayload.title || ''}`,
-    `- Urgency: ${finalPayload.urgency || ''}`,
-    `- Impact: ${finalPayload.impact || ''}`,
-    ticketId ? `- Ticket ID: ${ticketId}` : null,
-    ticketUrl ? `- Ticket Link: ${ticketUrl}` : null,
-    ``,
-    `Next steps`,
-    `- You can reply directly to this email to add more details.`,
-    `- You may attach screenshots or other files.`,
-    `- Please keep the email subject unchanged so we can associate your response with the ticket.`,
-    ``,
-    `Regards,`,
-    `DKU Library Systems`
-  ].filter(Boolean);
-
-  MailApp.sendEmail({
-    to: toEmail,
-    subject: subject,
-    body: lines.join('\n')
-  });
-
-  //邮件发送成功之后，记录一下
-
-
-}
-
-//通用日志函数（Code.gs）
-function logEvent_(type, stage, email, message) {
-  try {
-    const ss = SpreadsheetApp.openById(SHEET_4_LOG);
-    const sheet = ss.getSheetByName('Logs') || ss.insertSheet('Logs');
-
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow(['Timestamp', 'Type', 'Stage', 'Email', 'Message']);
-    }
-
-    sheet.appendRow([
-      new Date(),
-      type,          // INFO / WARN / ERROR
-      stage,         // e.g. SEND_EMAIL
-      email || '',
-      message || ''
-    ]);
-  } catch (e) {
-    // Last-resort: do not break main flow
-    console.error('Logging failed', e);  //记录失败
-    
-  }
-}
-
