@@ -116,9 +116,7 @@ function onTicketsEdit(e) {
   const cLast = col_(sheet, 'Last updated');
   const cFirst = col_(sheet, 'FirstResponseAt');
   const cRes = col_(sheet, 'ResolvedAt');
-
-  // Always update Last updated
-  sheet.getRange(row, cLast).setValue(new Date());
+  const cClosed = col_(sheet, 'ClosedAt');
 
   // Only act on Status change
   if (e.range.getColumn() !== cStatus) return;
@@ -128,16 +126,36 @@ function onTicketsEdit(e) {
   if (!newStatus || newStatus === oldStatus) return;
   if (typeof newStatus !== 'string') return;
 
+  if (!DKUTicketCore.isValidStatus(newStatus)) {
+    sheet.getRange(row, cStatus).setValue(oldStatus || '');
+    console.warn(`Invalid status: ${newStatus}`);
+    return;
+  }
+  if (oldStatus && !DKUTicketCore.isValidTransition(oldStatus, newStatus)) {
+    sheet.getRange(row, cStatus).setValue(oldStatus);
+    console.warn(`Invalid status transition: ${oldStatus} -> ${newStatus}`);
+    return;
+  }
+
+  // Always update Last updated on valid status change
+  sheet.getRange(row, cLast).setValue(new Date());
+
   // First response time
   const firstCell = sheet.getRange(row, cFirst);
-  if (!firstCell.getValue() && newStatus !== 'New') {
+  if (newStatus === 'In Progress' && !firstCell.getValue()) {
     firstCell.setValue(new Date());
   }
 
   // Resolved time
   const resCell = sheet.getRange(row, cRes);
-  if (newStatus === 'Resolved' && !resCell.getValue()) {
+  if (newStatus === 'Resolved') {
     resCell.setValue(new Date());
+  }
+
+  // Closed time
+  const closedCell = sheet.getRange(row, cClosed);
+  if (newStatus === 'Closed') {
+    closedCell.setValue(new Date());
   }
 
   // Update overdue flag
@@ -187,7 +205,7 @@ Description: ${description}
 Previous status: ${oldStatus || 'N/A'}
 Current status: ${newStatus}
 
-${statusExplanation_(newStatus)}
+${DKUTicketCore.statusExplanation(newStatus)}
 
 You may reply to this email if you have additional information.
 
@@ -195,23 +213,6 @@ You may reply to this email if you have additional information.
 `;
 
   MailApp.sendEmail(to, subject, body);
-}
-
-function statusExplanation_(status) {
-  switch (status) {
-    case 'In Progress':
-      return 'We are currently working on your request.';
-    case 'Waiting User':
-      return 'We are waiting for additional information from you.';
-    case 'Waiting IT/Vendor':
-      return 'We are coordinating with IT or the vendor.';
-    case 'Resolved':
-      return 'The issue has been resolved. Please let us know if it persists.';
-    case 'Closed':
-      return 'This ticket is now closed. Thank you.';
-    default:
-      return '';
-  }
 }
 
 /***********************
@@ -396,6 +397,7 @@ function createTicketViaApi_(payload) {
 
   const body = {
     token: TICKET_API_TOKEN,
+    requestId: payload.requestId || Utilities.getUuid(),
     email: payload.email,
     title: payload.title,
     description: payload.description,
