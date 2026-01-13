@@ -50,6 +50,7 @@ function startChat(email) {
   const s = {
     step: 'ASK_TITLE',
     payload: {
+      requestId: Utilities.getUuid(),
       email: em,
       title: '',
       system: '',
@@ -206,6 +207,7 @@ function chatTurn(input) {
       }
 
       const finalPayload = {
+        requestId: p.requestId,
         email: p.email,
         title: `[${p.system}] ${p.title}`,
         description: `System: ${p.system}\n` + p.description,
@@ -237,6 +239,7 @@ function ping() {
 function createTicketFromWeb(payload) {
   const body = {
     token: getToken_(),
+    requestId: payload.requestId,
     email: payload.email,
     title: payload.title,
     description: payload.description,

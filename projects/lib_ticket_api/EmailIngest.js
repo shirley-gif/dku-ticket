@@ -32,10 +32,8 @@ function ingestTicketReplies() {
   const unmatchedLabel = GmailApp.getUserLabelByName(LABEL_UNMATCHED);
 
   // 只扫描 Replies 标签下的 thread（Gmail 搜索不支持层级 label 的 regex，但 label: 精确）
-  const threads = GmailApp.search(`label:"${LABEL_REPLIES}" -label:"${LABEL_PROCESSED}"`, 0, 50);
-  //const threads = GmailApp.search( 'label:Replies -label:Processed', 0, 50);
-
-  if (!threads.length) return { ok: true, scannedThreads: 0, ingested: 0 };
+  const query = `label:"${LABEL_REPLIES}" -label:"${LABEL_PROCESSED}"`;
+  const batchSize = 50;
 
   // 预加载 Tickets 数据（用于 TicketID -> rowIndex 映射）
   const ticketIndex = buildTicketIdIndex_(ticketSheet, cols['TicketID']);
@@ -44,44 +42,70 @@ function ingestTicketReplies() {
   const seenMessageIds = loadSeenMessageIds_(logSheet);
 
   let ingested = 0;
+  let scannedThreads = 0;
+  let start = 0;
+  let threads = [];
 
-  for (const thread of threads) {
-    const messages = thread.getMessages();
+  do {
+    threads = GmailApp.search(query, start, batchSize);
+    if (!threads.length && scannedThreads === 0) {
+      return { ok: true, scannedThreads: 0, ingested: 0 };
+    }
+    scannedThreads += threads.length;
 
-    for (const msg of messages) {
-      const messageId = safeGetMessageId_(msg);
-      if (!messageId) continue;
-      if (seenMessageIds.has(messageId)) continue; // 去重
+    for (const thread of threads) {
+      const messages = thread.getMessages();
 
-      const subject = msg.getSubject() || '';
-      const from = msg.getFrom() || '';
-      const date = msg.getDate(); // Date object
-      const snippet = (msg.getPlainBody ? msg.getPlainBody() : msg.getBody()).slice(0, 1000); // 防止超大
-  
-      const ticketId = extractTicketId_(subject);
+      for (const msg of messages) {
+        const messageId = safeGetMessageId_(msg);
+        if (!messageId) continue;
+        if (seenMessageIds.has(messageId)) continue; // 去重
 
-      if (!ticketId) {
-        // 无法提取 TicketID：标记 Unmatched
-        try { thread.addLabel(unmatchedLabel); } catch (e) {}
-        appendLogRow_(logSheet, {
-          TicketID: '',
-          MessageTime: date,
-          Direction: 'inbound',
-          From: from,
-          Subject: subject,
-          Snippet: truncate_(snippet, 100),
-          MessageId: messageId,
-          ThreadId: thread.getId()
-        });
-        seenMessageIds.add(messageId);
-        ingested++;
-        continue;
-      }
+        const subject = msg.getSubject() || '';
+        const from = msg.getFrom() || '';
+        const date = msg.getDate(); // Date object
+        const snippet = (msg.getPlainBody ? msg.getPlainBody() : msg.getBody()).slice(0, 1000); // 防止超大
+    
+        const ticketId = extractTicketId_(subject);
 
-      const rowIndex = ticketIndex.get(ticketId); // 1-based row index
-      if (!rowIndex) {
-        // 有 TicketID 但 Tickets 表找不到：标记 Unmatched
-        try { thread.addLabel(unmatchedLabel); } catch (e) {}
+        if (!ticketId) {
+          // 无法提取 TicketID：标记 Unmatched
+          try { thread.addLabel(unmatchedLabel); } catch (e) {}
+          appendLogRow_(logSheet, {
+            TicketID: '',
+            MessageTime: date,
+            Direction: 'inbound',
+            From: from,
+            Subject: subject,
+            Snippet: truncate_(snippet, 100),
+            MessageId: messageId,
+            ThreadId: thread.getId()
+          });
+          seenMessageIds.add(messageId);
+          ingested++;
+          continue;
+        }
+
+        const rowIndex = ticketIndex.get(ticketId); // 1-based row index
+        if (!rowIndex) {
+          // 有 TicketID 但 Tickets 表找不到：标记 Unmatched
+          try { thread.addLabel(unmatchedLabel); } catch (e) {}
+          appendLogRow_(logSheet, {
+            TicketID: ticketId,
+            MessageTime: date,
+            Direction: 'inbound',
+            From: from,
+            Subject: subject,
+            Snippet: truncate_(snippet, 100),
+            MessageId: messageId,
+            ThreadId: thread.getId()
+          });
+          seenMessageIds.add(messageId);
+          ingested++;
+          continue;
+        }
+
+        // 1) 写入 Log（每封邮件一行）
         appendLogRow_(logSheet, {
           TicketID: ticketId,
           MessageTime: date,
@@ -92,37 +116,24 @@ function ingestTicketReplies() {
           MessageId: messageId,
           ThreadId: thread.getId()
         });
+
+        // 2) 更新 Tickets 主表：Notes + Last updated（只写摘要）
+        const summary = buildLatestNote_(from, date, snippet);
+        appendNotes_(ticketSheet, rowIndex, cols['Notes'], summary);
+        ticketSheet.getRange(rowIndex, cols['Last updated']).setValue(new Date());
+
         seenMessageIds.add(messageId);
         ingested++;
-        continue;
       }
 
-      // 1) 写入 Log（每封邮件一行）
-      appendLogRow_(logSheet, {
-        TicketID: ticketId,
-        MessageTime: date,
-        Direction: 'inbound',
-        From: from,
-        Subject: subject,
-        Snippet: truncate_(snippet, 100),
-        MessageId: messageId,
-        ThreadId: thread.getId()
-      });
-
-      // 2) 更新 Tickets 主表：Notes + Last updated（只写摘要）
-      const summary = buildLatestNote_(from, date, snippet);
-      ticketSheet.getRange(rowIndex, cols['Notes']).setValue(truncate_(summary, NOTES_MAX_CHARS));
-      ticketSheet.getRange(rowIndex, cols['Last updated']).setValue(new Date());
-
-      seenMessageIds.add(messageId);
-      ingested++;
+      // 该 thread 处理完，打 Processed 标签（避免重复扫描）
+      try { thread.addLabel(processedLabel); } catch (e) {}
     }
 
-    // 该 thread 处理完，打 Processed 标签（避免重复扫描）
-    try { thread.addLabel(processedLabel); } catch (e) {}
-  }
+    start += threads.length;
+  } while (threads.length === batchSize);
 
-  return { ok: true, scannedThreads: threads.length, ingested };
+  return { ok: true, scannedThreads, ingested };
 }
 
 /***********************
@@ -245,4 +256,11 @@ function buildLatestNote_(from, date, body) {
     .map(s => s.trim())
     .filter(Boolean)[0] || '';
   return `Email reply ${ts} from ${from}: ${oneLine}`;
+}
+
+function appendNotes_(ticketSheet, rowIndex, notesCol, summary) {
+  const cell = ticketSheet.getRange(rowIndex, notesCol);
+  const current = String(cell.getValue() || '').trim();
+  const next = current ? `${current}\n${summary}` : summary;
+  cell.setValue(truncate_(next, NOTES_MAX_CHARS));
 }
