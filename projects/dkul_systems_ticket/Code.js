@@ -36,6 +36,12 @@ function col_(sheet, headerName) {
   return idx + 1;
 }
 
+function colOptional_(sheet, headerName) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idx = headers.indexOf(headerName);
+  return idx === -1 ? 0 : idx + 1;
+}
+
 function nextTicketSeq_() {
   const props = PropertiesService.getScriptProperties();
   const k = 'TICKET_SEQ';
@@ -58,7 +64,7 @@ function onFormSubmit(e) {
   // 根据你的表单问题标题改 key（示例：Email/Title/Description/Urgency/Impact）
   const email = String((nv['Email'] || nv['email'] || [''])[0]).trim();
   const title = String((nv['Title'] || nv['title'] || [''])[0]).trim();
-  const system = String((nv['Category'] || nv['Category'] || [''])[0]).trim();
+  const system = String((nv['category'] || nv['Category'] || [''])[0]).trim();
   const description = String((nv['Description'] || nv['description'] || [''])[0]).trim();
   const urgency = String((nv['Urgency'] || ['Medium'])[0]).trim();
   const impact = String((nv['Impact'] || ['Medium'])[0]).trim();
@@ -72,6 +78,7 @@ function onFormSubmit(e) {
   const finalDescription = `System: ${system}\n${description}`;
 
   const res = createTicketViaApi_({
+    requestId: buildFormRequestId_(e),
     email,
     title: finalTitle,
     description: finalDescription,
@@ -98,6 +105,17 @@ function onFormSubmit(e) {
     // 写回失败不影响主流程
     console.warn('Failed to write TicketID back to form sheet:', String(err));
   }
+}
+
+function buildFormRequestId_(e) {
+  const range = e && e.range ? e.range : null;
+  const sheet = range ? range.getSheet() : null;
+  const spreadsheetId = e && e.source ? e.source.getId() : SpreadsheetApp.getActiveSpreadsheet().getId();
+  if (!range || !sheet) {
+    console.warn('onFormSubmit: missing range or sheet for deterministic requestId.');
+    return Utilities.getUuid();
+  }
+  return `form:${spreadsheetId}:${sheet.getSheetId()}:${range.getRow()}`;
 }
 
 
@@ -166,10 +184,12 @@ function onTicketsEdit(e) {
   const email = sheet.getRange(row, col_(sheet, 'Email')).getValue();
   const title = sheet.getRange(row, col_(sheet, 'Title')).getValue();
   const description = sheet.getRange(row, col_(sheet, 'Description')).getValue();
+  const resolutionCol = colOptional_(sheet, 'Resolution');
+  const resolution = resolutionCol ? sheet.getRange(row, resolutionCol).getValue() : '';
 
   if (!ticketId || !email) return;
 
-  sendStatusUpdateEmail_(email, ticketId, title, description, oldStatus, newStatus);
+  sendStatusUpdateEmail_(email, ticketId, title, description, oldStatus, newStatus, resolution);
 }
 
 /***********************
@@ -193,7 +213,10 @@ function updateOverdueFlag_(sheet, row) {
 /***********************
  * STATUS UPDATE EMAIL
  ***********************/
-function sendStatusUpdateEmail_(to, ticketId, title, description, oldStatus, newStatus) {
+function sendStatusUpdateEmail_(to, ticketId, title, description, oldStatus, newStatus, resolution) {
+  const resolutionLine = (newStatus === 'Resolved' && resolution)
+    ? `Resolution: ${resolution}\n`
+    : '';
   const subject = `[DKU Library Systems Ticket (#${ticketId})] Status updated: ${newStatus}`;
   const body = `
 Your library support request has been updated.
@@ -201,6 +224,7 @@ Your library support request has been updated.
 Ticket ID: ${ticketId}
 Title: ${title}
 Description: ${description}
+${resolutionLine}
 
 Previous status: ${oldStatus || 'N/A'}
 Current status: ${newStatus}
