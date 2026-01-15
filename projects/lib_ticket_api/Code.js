@@ -236,15 +236,44 @@ function enforceAbuseControls_(email) {
     const pruned = history.filter(ts => now - ts < windowMs);
     if (pruned.length >= max) {
       state[key] = pruned;
+      state = cleanupRateLimitState_(state, now, windowMs);
       props.setProperty(RATE_LIMIT_STATE_KEY, JSON.stringify(state));
       return { ok: false, status: 429, error: 'Too many requests. Please try again later.' };
     }
     pruned.push(now);
     state[key] = pruned;
+    state = cleanupRateLimitState_(state, now, windowMs);
     props.setProperty(RATE_LIMIT_STATE_KEY, JSON.stringify(state));
   }
 
   return { ok: true };
+}
+
+function cleanupRateLimitState_(state, now, windowMs) {
+  const MAX_KEYS = 100;
+  const TRIM_TO = 50;
+  const clean = {};
+  Object.keys(state || {}).forEach((emailKey) => {
+    const history = Array.isArray(state[emailKey]) ? state[emailKey] : [];
+    const pruned = history.filter(ts => typeof ts === 'number' && now - ts < windowMs);
+    if (pruned.length) clean[emailKey] = pruned;
+  });
+
+  const keys = Object.keys(clean);
+  if (keys.length > MAX_KEYS) {
+    // 100/50 hysteresis to prevent boundary thrash and accidental over-trimming.
+    keys.sort((a, b) => {
+      const aLast = clean[a][clean[a].length - 1] || 0;
+      const bLast = clean[b][clean[b].length - 1] || 0;
+      return bLast - aLast;
+    });
+    const keep = new Set(keys.slice(0, TRIM_TO));
+    keys.forEach((k) => {
+      if (!keep.has(k)) delete clean[k];
+    });
+  }
+
+  return clean;
 }
 
 function testRequestIdDeduplication() {
