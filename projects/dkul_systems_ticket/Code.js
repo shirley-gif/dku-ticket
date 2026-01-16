@@ -128,7 +128,42 @@ function onTicketsEdit(e) {
   if (sheet.getName() !== SHEET_TICKETS) return;
   if (e.range.getRow() === 1) return;
 
-  const row = e.range.getRow();
+  const cStatus = col_(sheet, 'Status');
+  const cLast = col_(sheet, 'Last updated');
+  const cFirst = col_(sheet, 'FirstResponseAt');
+  const cRes = col_(sheet, 'ResolvedAt');
+  const cClosed = col_(sheet, 'ClosedAt');
+
+  const range = e.range;
+  const numRows = range.getNumRows();
+  const numCols = range.getNumColumns();
+  const startCol = range.getColumn();
+  const endCol = startCol + numCols - 1;
+  if (cStatus < startCol || cStatus > endCol) return;
+
+  const startRow = range.getRow();
+  const isSingleCell = numRows === 1 && numCols === 1;
+
+  for (let i = 0; i < numRows; i++) {
+    const row = startRow + i;
+    if (row === 1) continue;
+    const newStatus = String(sheet.getRange(row, cStatus).getValue() || '').trim();
+    const oldStatus = isSingleCell ? e.oldValue : '';
+    const allowTransitionCheck = isSingleCell && oldStatus;
+    processStatusRow_(sheet, row, {
+      newStatus,
+      oldStatus: oldStatus || '',
+      allowTransitionCheck,
+      updateTimestamps: true,
+      sendEmail: isSingleCell
+    });
+  }
+}
+
+function processStatusRow_(sheet, row, opts) {
+  const newStatus = opts.newStatus;
+  const oldStatus = opts.oldStatus;
+  if (!newStatus || (opts.allowTransitionCheck && newStatus === oldStatus)) return;
 
   const cStatus = col_(sheet, 'Status');
   const cLast = col_(sheet, 'Last updated');
@@ -136,60 +171,49 @@ function onTicketsEdit(e) {
   const cRes = col_(sheet, 'ResolvedAt');
   const cClosed = col_(sheet, 'ClosedAt');
 
-  // Only act on Status change
-  if (e.range.getColumn() !== cStatus) return;
-
-  const newStatus = e.value;
-  const oldStatus = e.oldValue;
-  if (!newStatus || newStatus === oldStatus) return;
-  if (typeof newStatus !== 'string') return;
-
   if (!DKUTicketCore.isValidStatus(newStatus)) {
     sheet.getRange(row, cStatus).setValue(oldStatus || '');
     console.warn(`Invalid status: ${newStatus}`);
     return;
   }
-  if (oldStatus && !DKUTicketCore.isValidTransition(oldStatus, newStatus)) {
+  if (opts.allowTransitionCheck && oldStatus && !DKUTicketCore.isValidTransition(oldStatus, newStatus)) {
     sheet.getRange(row, cStatus).setValue(oldStatus);
     console.warn(`Invalid status transition: ${oldStatus} -> ${newStatus}`);
     return;
   }
 
-  // Always update Last updated on valid status change
-  sheet.getRange(row, cLast).setValue(new Date());
-
-  // First response time
-  const firstCell = sheet.getRange(row, cFirst);
-  if (newStatus === 'In Progress' && !firstCell.getValue()) {
-    firstCell.setValue(new Date());
+  if (opts.updateTimestamps) {
+    sheet.getRange(row, cLast).setValue(new Date());
+    const firstCell = sheet.getRange(row, cFirst);
+    if (newStatus === 'In Progress' && !firstCell.getValue()) {
+      firstCell.setValue(new Date());
+    }
+    const resCell = sheet.getRange(row, cRes);
+    if (newStatus === 'Resolved') {
+      resCell.setValue(new Date());
+    } else {
+      resCell.setValue('');
+    }
+    const closedCell = sheet.getRange(row, cClosed);
+    if (newStatus === 'Closed') {
+      closedCell.setValue(new Date());
+    } else {
+      closedCell.setValue('');
+    }
   }
 
-  // Resolved time
-  const resCell = sheet.getRange(row, cRes);
-  if (newStatus === 'Resolved') {
-    resCell.setValue(new Date());
-  }
-
-  // Closed time
-  const closedCell = sheet.getRange(row, cClosed);
-  if (newStatus === 'Closed') {
-    closedCell.setValue(new Date());
-  }
-
-  // Update overdue flag
   updateOverdueFlag_(sheet, row);
 
-  // Email user
-  const ticketId = sheet.getRange(row, col_(sheet, 'TicketID')).getValue();
-  const email = sheet.getRange(row, col_(sheet, 'Email')).getValue();
-  const title = sheet.getRange(row, col_(sheet, 'Title')).getValue();
-  const description = sheet.getRange(row, col_(sheet, 'Description')).getValue();
-  const resolutionCol = colOptional_(sheet, 'Resolution');
-  const resolution = resolutionCol ? sheet.getRange(row, resolutionCol).getValue() : '';
-
-  if (!ticketId || !email) return;
-
-  sendStatusUpdateEmail_(email, ticketId, title, description, oldStatus, newStatus, resolution);
+  if (opts.sendEmail) {
+    const ticketId = sheet.getRange(row, col_(sheet, 'TicketID')).getValue();
+    const email = sheet.getRange(row, col_(sheet, 'Email')).getValue();
+    const title = sheet.getRange(row, col_(sheet, 'Title')).getValue();
+    const description = sheet.getRange(row, col_(sheet, 'Description')).getValue();
+    const resolutionCol = colOptional_(sheet, 'Resolution');
+    const resolution = resolutionCol ? sheet.getRange(row, resolutionCol).getValue() : '';
+    if (!ticketId || !email) return;
+    sendStatusUpdateEmail_(email, ticketId, title, description, oldStatus, newStatus, resolution);
+  }
 }
 
 /***********************

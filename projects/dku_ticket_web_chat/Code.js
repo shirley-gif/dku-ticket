@@ -48,6 +48,7 @@ function startChat(email) {
   }
 
   const s = {
+    createdAtMs: Date.now(),
     step: 'ASK_TITLE',
     payload: {
       requestId: Utilities.getUuid(),
@@ -66,6 +67,27 @@ function startChat(email) {
     ok: true,
     message: 'Please enter a one-sentence summary (Ticket Title, 5–120 characters). Example: “Summon record page should not display MARC 035.”'
   };
+}
+
+function getValidSession_() {
+  const s = getSession_();
+  if (!s || !s.step || !s.payload || !s.payload.requestId) {
+    clearSession_();
+    return { ok: false, reason: 'corrupt' };
+  }
+  const ttlMs = 30 * 60 * 1000;
+  if (!s.createdAtMs || (Date.now() - s.createdAtMs) > ttlMs) {
+    clearSession_();
+    return { ok: false, reason: 'expired' };
+  }
+  return { ok: true, session: s };
+}
+
+function classifyError_(res) {
+  const http = res && typeof res.http === 'number' ? res.http : 0;
+  if (http >= 500 || http === 0) return 'retryable';
+  if (http >= 400) return 'actionable';
+  return 'unknown';
 }
 
 function isValidEmail_(email) {
@@ -139,11 +161,15 @@ function chatTurn(input) {
   if (cmd === 'restart') { clearSession_(); return { ok: true, message: 'Restarted. Please enter your email again (or click Start).' }; }
   if (cmd === 'cancel')  { clearSession_(); return { ok: true, message: 'Cancelled. No ticket was created.' }; }
 
-  let s = getSession_();
-  if (!s) {
-    return { ok: false, message: 'Session not found or expired. Please click Start to begin.' };
+  const sessionCheck = getValidSession_();
+  if (!sessionCheck.ok) {
+    const message = sessionCheck.reason === 'expired'
+      ? 'Session expired (30 minutes). Please click Start to begin again.'
+      : 'Session invalid or corrupted. Please click Start to begin again.';
+    return { ok: false, message };
   }
 
+  const s = sessionCheck.session;
   const p = s.payload;
 
   switch (s.step) {
@@ -215,12 +241,27 @@ function chatTurn(input) {
         impact: p.impact
       };
       const res = createTicketFromWeb(finalPayload);
+      const httpOk = res && typeof res.http === 'number' && res.http >= 200 && res.http < 300;
+      const hasTicketId = Boolean(res && res.ticketId);
+      const ok = httpOk && hasTicketId;
 
-      const ok = res && (res.ok === true || res.success === true);
-      
       // Email sending is handled by lib_ticket_api AFTER row creation.
+      if (ok) {
+        clearSession_();
+      }
 
-      clearSession_();
+      if (!ok) {
+        const kind = classifyError_(res);
+        const advice = kind === 'retryable'
+          ? 'Temporary error. Please retry without restarting so your requestId stays the same.'
+          : 'Please check your inputs or configuration (API URL/token) and try again.';
+        return {
+          ok: false,
+          message: `Ticket creation failed (${res && res.http ? res.http : 'no response'}). ${advice}`,
+          ticket_result: res
+        };
+      }
+
       return {
         ok: ok,
         message: ok
@@ -247,16 +288,25 @@ function createTicketFromWeb(payload) {
     impact: payload.impact
   };
 
-  const resp = UrlFetchApp.fetch(TICKET_API_URL, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true
-  });
+  let resp;
+  try {
+    resp = UrlFetchApp.fetch(TICKET_API_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true
+    });
+  } catch (err) {
+    return { ok: false, http: 0, error: String(err) };
+  }
 
   const text = resp.getContentText();
   let json;
-  try { json = JSON.parse(text); } catch (e) { json = { ok: false, error: text }; }
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    return { ok: false, http: resp.getResponseCode(), error: 'Invalid JSON response' };
+  }
 
   return { http: resp.getResponseCode(), ...json };
 }
